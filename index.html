@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="lv">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reāllaika dati</title>
+  <link rel="stylesheet" href="./main.css">
+</head>
+<body>
+  <div class="wrap">
+
+    <div class="topbar">
+      <h1>Reāllaika dati</h1>
+      <div class="statusbar">
+        <div class="pill" id="clock">--:--:--</div>
+        <div class="pill" id="last-update">Pēdējais atjauninājums: --</div>
+        <div class="pill-progress" id="pill-prog">
+          <div class="pill-progress-fill" id="pill-fill" style="width:100%"></div>
+          <span class="pill-progress-text" id="pill-label">Atjaunināšana pēc 10 sek</span>
+        </div>      
+      </div>
+    </div>
+
+    <div class="grid" id="board"></div>
+
+  </div>
+
+  <script>
+    const API_BASE   = 'http://localhost:5000/api';
+    const REFRESH_MS = 10000;
+    let nextRefresh  = Date.now() + REFRESH_MS;
+
+    const transportClass = t => ({ bus:'bus', trol:'trol', tram:'tram', train:'train' }[t] ?? 'other');
+    const transportLabel = t => ({ bus:`<span class="temaki--bus"></span>`, trol:`<span class="temaki--trolleybus"></span>`, tram:`<span class="temaki--tram"></span>`, train:`<span class="temaki--train-bullet"></span>`   }[t] ?? '?');
+    const etaClass = m => m < 0 ? 'overdue' : m <= 1 ? 'arrive' : m <= 5 ? 'soon' : 'late';
+    const formatEta = m => m < 0 ? '0' : String(m);
+
+    function updateClock() {
+      document.getElementById('clock').textContent =
+        new Date().toLocaleTimeString('lv-LV');
+    }
+
+    function updateProgress() {
+      const remaining = Math.max(0, nextRefresh - Date.now());
+      const pct = (remaining / REFRESH_MS) * 100;
+      const sec = Math.ceil(remaining / 1000);
+      document.getElementById('pill-fill').style.width  = pct + '%';
+      document.getElementById('pill-label').textContent = `Atjaunināšana pēc ${sec} sek`;
+    }
+
+    function renderStopCard(item) {
+      const stop = item.stop;
+
+      const deps = Array.isArray(item.departures) ? item.departures : [];
+      const rows = deps.length
+        ? deps.slice(0, 6).map(dep => `
+            <div class="row">
+              <div class="badge ${transportClass(dep.type)}">
+                ${transportLabel(dep.type)}${dep.route}
+              </div>
+              <div>
+                <div class="main-line">${dep.destination}</div>
+                <div class="dest">${dep.type === "train" ? (dep.origin ? "no " + dep.origin : "") : dep.transport_id}</div>
+              </div>
+              <div class="eta ${etaClass(dep.scheduled_min)}">
+                ${formatEta(dep.scheduled_min)}
+                <small>min</small>
+              </div>
+            </div>`).join('')
+        : '<div class="nodata">Nav reāllaika datu attiecībā uz šo pieturu.</div>';
+
+      return `
+        <div class="card">
+          <div class="head">
+            <div class="stop-name">${stop.name || 'Pietura'}</div>
+            <div class="stop-meta">
+              <span>${stop.street}</span>
+              <span>${stop.direction || ''}</span>
+            </div>
+          </div>
+          <div class="list">${rows}</div>
+        </div>`;
+    }
+
+    async function loadBoard() {
+      const board = document.getElementById('board');
+      try {
+        const res = await fetch(`${API_BASE}/all`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        board.innerHTML = data.stops.map(renderStopCard).join('');
+        document.getElementById('last-update').textContent =
+          'Pēdējais atjauninājums: ' + new Date().toLocaleTimeString('lv-LV');
+      } catch (err) {
+        board.innerHTML = `
+          <div class="card" style="grid-column:1/-1;min-height:180px;">
+            <div class="error">
+              Kļūda ielādē: ${err.message}.<br>
+              Pārbaudiet, vai Python API darbojas uz http://localhost:5000
+            </div>
+          </div>`;
+      }
+    }
+
+    async function refresh() {
+      await loadBoard();
+      nextRefresh = Date.now() + REFRESH_MS;
+    }
+
+    updateClock();
+    updateProgress();
+    setInterval(updateClock,    1000);
+    setInterval(updateProgress,  100);
+    refresh();
+    setInterval(refresh, REFRESH_MS);
+  </script>
+</body>
+</html>
