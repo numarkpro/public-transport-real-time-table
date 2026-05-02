@@ -26,14 +26,19 @@
   </div>
 
   <script>
-    const API_BASE   = 'http://localhost:5000/api';
+    const API_BASE = 'http://localhost:5000/api';
     const REFRESH_MS = 10000;
-    let nextRefresh  = Date.now() + REFRESH_MS;
+    let nextRefresh = Date.now() + REFRESH_MS;
 
     const transportClass = t => ({ bus:'bus', trol:'trol', tram:'tram', train:'train' }[t] ?? 'other');
     const transportLabel = t => ({ bus:`<span class="temaki--bus"></span>`, trol:`<span class="temaki--trolleybus"></span>`, tram:`<span class="temaki--tram"></span>`, train:`<span class="temaki--train-bullet"></span>`   }[t] ?? '?');
-    const etaClass = m => m < 0 ? 'overdue' : m <= 1 ? 'arrive' : m <= 5 ? 'soon' : 'late';
-    const formatEta = m => m < 0 ? '0' : String(m);
+    const etaClass = m => m < 0 ? 'overdue' : m <= 1 ? 'arrive' : m <= 5 ? 'soon' : 'normal';
+    const formatEta = m => {
+        if (m < 0) return 'Aizbr';
+        if (m <= 0) return 'Pienāk';
+        if (m >= 60) return `${Math.floor(m/60)}h ${m%60}`;
+        return String(m);
+    };
 
     function updateClock() {
       document.getElementById('clock').textContent =
@@ -64,13 +69,13 @@
               </div>
               <div class="eta ${etaClass(dep.scheduled_min)}">
                 ${formatEta(dep.scheduled_min)}
-                <small>min</small>
+                ${dep.scheduled_min > 0 ? '<small>min</small>' : ''}
               </div>
             </div>`).join('')
         : '<div class="nodata">Nav reāllaika datu attiecībā uz šo pieturu.</div>';
 
       return `
-        <div class="card">
+        <div class="card ${stop.group ? 'grouped' : ''}">
           <div class="head">
             <div class="stop-name">${stop.name || 'Pietura'}</div>
             <div class="stop-meta">
@@ -88,7 +93,44 @@
         const res = await fetch(`${API_BASE}/all`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        board.innerHTML = data.stops.map(renderStopCard).join('');
+        function groupStops(stops) {
+            // Define which stop IDs should be paired
+            const pairs = [['0155','0154']];
+            const pairMap = {};
+            pairs.forEach(([a,b]) => { pairMap[a] = b; pairMap[b] = a; });
+            
+            const used = new Set();
+            const groups = [];
+            
+            for (let i = 0; i < stops.length; i++) {
+                const item = stops[i];
+                const id = item.stop.id;
+                if (used.has(id)) continue;
+                
+                const pairedId = pairMap[id];
+                if (pairedId) {
+                    const pairedItem = stops.find(s => s.stop.id === pairedId);
+                    if (pairedItem) {
+                        groups.push([item, pairedItem]);
+                        used.add(id);
+                        used.add(pairedId);
+                        continue;
+                    }
+                }
+                groups.push([item]);
+                used.add(id);
+            }
+            return groups;
+        }
+        board.innerHTML = groupStops(data.stops).map(group => {
+            if (group.length === 2) {
+                return `<div class="card-pair">
+                    ${renderStopCard(group[0])}
+                    ${renderStopCard(group[1])}
+                </div>`;
+            }
+            return renderStopCard(group[0]);
+        }).join('');
         document.getElementById('last-update').textContent =
           'Pēdējais atjauninājums: ' + new Date().toLocaleTimeString('lv-LV');
       } catch (err) {
@@ -109,8 +151,8 @@
 
     updateClock();
     updateProgress();
-    setInterval(updateClock,    1000);
-    setInterval(updateProgress,  100);
+    setInterval(updateClock, 1000);
+    setInterval(updateProgress, 100);
     refresh();
     setInterval(refresh, REFRESH_MS);
   </script>

@@ -4,8 +4,8 @@
     { "id": "2081", "name": "Prūšu iela",    "direction": "→ uz centru", "street": "Prūšu iela" },
     { "id": "0155", "name": "Ikšķiles iela", "direction": "← no centra", "street": "Lokomotīves iela", "group": "lok" },
     { "id": "0154", "name": "Ikšķiles iela", "direction": "→ uz centru", "street": "Lokomotīves iela", "group": "lok" },
+    { "id": "", "name": "Šķirotava", "direction": "", "street": "Lokomotīves iela" },
     { "id": "0201", "name": "Ikšķiles iela", "direction": "← no centra", "street": "Latgales iela" },
-    { "id": "0202", "name": "Ikšķiles iela", "direction": "→ uz centru", "street": "Latgales iela" },
-    { "id": "", "name": "Šķirotava", "direction": "", "street": "Lokomotīves iela" }
+    { "id": "0202", "name": "Ikšķiles iela", "direction": "→ uz centru", "street": "Latgales iela" } 
   ]
 }
