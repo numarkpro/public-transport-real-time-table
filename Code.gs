@@ -1,175 +1,103 @@
-// ── Configuration ────────────────────────────────────────
-var API_URL = "https://www.stops.lt/rigaapp/read.php";
+// ================================================================
+// Transit Board — Google Apps Script Backend
+// Деплой: Extensions → Apps Script → Deploy → New deployment
+//         Type: Web App, Execute as: Me, Who has access: Anyone
+// После деплоя скопируй URL и вставь в index.html (APPS_SCRIPT_URL)
+// ================================================================
 
-var STOPS_DATA = {
+const STOPS_JSON = JSON.stringify({
   "stops": [
-    { "id": "2081", "name": "Prūšu iela",    "direction": "→ uz centru", "street": "Prūšu iela" },
-    { "id": "2091", "name": "Prūšu iela",    "direction": "← no centra", "street": "Prūšu iela" },
-    { "id": "0201", "name": "Ikšķiles iela", "direction": "← no centra", "street": "Latgales iela" },
-    { "id": "0202", "name": "Ikšķiles iela", "direction": "→ uz centru", "street": "Latgales iela" },
-    { "id": "0154", "name": "Ikšķiles iela", "direction": "→ uz centru", "street": "Lokomotīves iela" },
-    { "id": "0155", "name": "Ikšķiles iela", "direction": "← no centra", "street": "Lokomotīves iela" },
+    { "id": "2091", "name": "Ikšķiles iela",  "direction": "← no centra", "street": "Prūšu iela" },
+    { "id": "2081", "name": "Prūšu iela",     "direction": "→ uz centru", "street": "Prūšu iela" },
+    { "id": "0155", "name": "Ikšķiles iela",  "direction": "← no centra", "street": "Lokomotīves iela", "group": "lok" },
+    { "id": "0154", "name": "Ikšķiles iela",  "direction": "→ uz centru", "street": "Lokomotīves iela", "group": "lok" },
+    { "id": "",     "name": "Šķirotava",      "direction": "",             "street": "Lokomotīves iela" },
+    { "id": "0201", "name": "Ikšķiles iela",  "direction": "← no centra", "street": "Latgales iela" },
+    { "id": "0202", "name": "Ikšķiles iela",  "direction": "→ uz centru", "street": "Latgales iela" }
   ]
-};
+});
 
-var REQUEST_HEADERS = {
-  "Origin-Custom": "stops.lt",
-  "Referer":        "https://stops.lt/",
-  "User-Agent":     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-};
+const API_URL  = "https://www.stops.lt/rigaapp/read.php";
+const VIVI_URL = "https://trainmap.vivi.lv/api/trainGraph";
 
-// ── Entry point ──────────────────────────────────────────
-// Routes are selected via the `action` query parameter:
-//   ?action=stops
-//   ?action=departures&stop_id=1234
-//   ?action=all
-//   ?action=health  (default)
+// ── Entry point ─────────────────────────────────────────────
 function doGet(e) {
-  var params = e.parameter || {};
-  var action = params.action || "health";
-  var stopId  = params.stop_id || null;
+  const action = (e && e.parameter && e.parameter.action) || "all";
 
-  var result;
-
-  switch (action) {
-    case "stops":
-      result = loadStops();
-      break;
-
-    case "departures":
-      if (!stopId) {
-        result = { error: "stop_id parameter is required" };
-      } else {
-        result = {
-          stop_id:    stopId,
-          timestamp:  Math.floor(Date.now() / 1000),
-          now_sec:    secondsFromMidnight(),
-          departures: fetchStop(stopId),
-        };
-      }
-      break;
-
-    case "all":
-      var stops     = loadStops();
-      var allStops  = [];
-      for (var i = 0; i < stops.length; i++) {
-        var stop = stops[i];
-        if (!stop.id) {
-          allStops.push({ stop: stop, departures: [] });
-          continue;
-        }
-        allStops.push({ stop: stop, departures: fetchStop(stop.id) });
-      }
-      result = {
-        timestamp: Math.floor(Date.now() / 1000),
-        now_sec:   secondsFromMidnight(),
-        stops:     allStops,
-      };
-      break;
-
-    case "health":
-    default:
-      result = { status: "ok", time: Math.floor(Date.now() / 1000) };
-      break;
-  }
-
-  var json     = JSON.stringify(result);
-  var callback  = params.callback;
-
-  // JSONP: wrap in callback when ?callback= is present (bypasses CORS redirect issue)
-  if (callback) {
-    return ContentService
-      .createTextOutput(callback + '(' + json + ')')
-      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  let result;
+  try {
+    if (action === "stops")       result = loadStops();
+    else if (action === "all")    result = getAllDepartures();
+    else if (action === "health") result = { status: "ok", time: Math.floor(Date.now() / 1000) };
+    else                          result = { error: "Unknown action: " + action };
+  } catch (err) {
+    result = { error: err.message };
   }
 
   return ContentService
-    .createTextOutput(json)
+    .createTextOutput(JSON.stringify(result))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// ── Stop validation ──────────────────────────────────────
-function validateStop(stop) {
-  if (typeof stop !== "object" || stop === null || Array.isArray(stop)) {
-    return false;
-  }
-
-  var id        = stop.id;
-  var name      = stop.name;
-  var direction = stop.direction;
-  var street    = stop.street;
-
-  // ID must be a 4-digit string
-  if (typeof id !== "string" || id.length !== 4 || !/^\d{4}$/.test(id)) {
-    return false;
-  }
-  // name must be a non-empty string ≤ 100 chars
-  if (typeof name !== "string" || name.trim() === "" || name.length > 100) {
-    return false;
-  }
-  // direction must be a non-empty string ≤ 100 chars
-  if (typeof direction !== "string" || direction.trim() === "" || direction.length > 100) {
-    return false;
-  }
-  // street must be a non-empty string ≤ 100 chars
-  if (typeof street !== "string" || street.trim() === "" || street.length > 100) {
-    return false;
-  }
-
-  return true;
-}
-
-// ── Load stops from embedded config ─────────────────────
+// ── Helpers ──────────────────────────────────────────────────
 function loadStops() {
-  var data = STOPS_DATA;
-
-  if (typeof data !== "object" || data === null ||
-      !Array.isArray(data.stops)) {
-    Logger.log("JSON struktūras kļūda: lauks 'stops' nav derīgs");
-    return [];
-  }
-
-  var validStops = [];
-  for (var i = 0; i < data.stops.length; i++) {
-    var stop = data.stops[i];
-    if (validateStop(stop)) {
-      validStops.push(stop);
-    } else {
-      Logger.log("Nederīgs pieturas ieraksts: " + JSON.stringify(stop));
-    }
-  }
-  return validStops;
+  return JSON.parse(STOPS_JSON).stops;
 }
 
-// ── Time helpers ─────────────────────────────────────────
+// Rīgas laiks UTC+3 → sekundes no pusnakts
 function secondsFromMidnight() {
-  var now = new Date();
-  return now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+  const now = new Date();
+  const rigaOffset = 3 * 60; // minūtes
+  const utcMin = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const rigaMin = (utcMin + rigaOffset) % (24 * 60);
+  const rigaSec = rigaMin * 60 + now.getUTCSeconds();
+  return rigaSec;
 }
 
-// ── Parse raw CSV departures text ────────────────────────
+// ── stops.lt API ─────────────────────────────────────────────
+function fetchStop(stopId) {
+  const url = API_URL + "?stopid=" + encodeURIComponent(stopId)
+            + "&time=" + Date.now();
+  const options = {
+    method: "get",
+    headers: {
+      "Origin-Custom": "stops.lt",
+      "Referer":       "https://stops.lt/",
+      "User-Agent":    "Mozilla/5.0"
+    },
+    muteHttpExceptions: true
+  };
+
+  try {
+    const resp = UrlFetchApp.fetch(url, options);
+    if (resp.getResponseCode() !== 200) {
+      return { error: "HTTP " + resp.getResponseCode() };
+    }
+    return parseDepartures(resp.getContentText());
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
 function parseDepartures(rawText) {
-  var lines  = rawText.trim().split("\n");
-  var nowSec = secondsFromMidnight();
-  var departures = [];
+  const nowSec = secondsFromMidnight();
+  const lines = rawText.trim().split("\n");
+  const departures = [];
 
-  // Skip the first (header) line
-  for (var i = 1; i < lines.length; i++) {
-    var line = lines[i].trim();
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
     if (!line) continue;
-
-    var parts = line.split(",");
+    const parts = line.split(",");
     if (parts.length < 6) continue;
 
-    var transportType = parts[0];   // bus, trol, tram, train
-    var route         = parts[1];
-    var direction     = parts[2];
-    var scheduledSec  = parseInt(parts[3], 10);
-    var transportId   = parseInt(parts[4], 10);
-    var destination   = parts[5];
+    const transportType  = parts[0];
+    const route          = parts[1];
+    const direction      = parts[2];
+    const scheduledSec   = parseInt(parts[3], 10);
+    const transportId    = parseInt(parts[4], 10);
+    const destination    = parts[5];
 
-    var schedMin = Math.round((scheduledSec - nowSec) / 60);
-    // Skip departures that left more than 1 minute ago
+    const schedMin = Math.round((scheduledSec - nowSec) / 60);
     if (schedMin < -1) continue;
 
     departures.push({
@@ -179,31 +107,81 @@ function parseDepartures(rawText) {
       destination:   destination,
       scheduled_min: schedMin,
       scheduled_sec: scheduledSec,
-      transport_id:  transportId,
+      transport_id:  transportId
     });
   }
 
-  departures.sort(function(a, b) { return a.scheduled_sec - b.scheduled_sec; });
+  departures.sort((a, b) => a.scheduled_sec - b.scheduled_sec);
   return departures.slice(0, 10);
 }
 
-// ── Fetch departures for a single stop ───────────────────
-function fetchStop(stopId) {
-  var url = API_URL + "?stopid=" + encodeURIComponent(stopId) +
-                      "&time="   + Date.now();
-  var options = {
-    method:            "get",
-    headers:           REQUEST_HEADERS,
-    muteHttpExceptions: true,
-  };
-
+// ── ViVi trains API ──────────────────────────────────────────
+function fetchTrainStop() {
+  const nowSec = secondsFromMidnight();
   try {
-    var resp = UrlFetchApp.fetch(url, options);
-    if (resp.getResponseCode() !== 200) {
-      return { error: "HTTP " + resp.getResponseCode() };
+    const resp = UrlFetchApp.fetch(VIVI_URL, { muteHttpExceptions: true });
+    if (resp.getResponseCode() !== 200) return { error: "HTTP " + resp.getResponseCode() };
+    const trains = JSON.parse(resp.getContentText()).data || [];
+
+    const departures = [];
+    for (const train of trains) {
+      const stops = train.stops || [];
+      const skiIdx = stops.findIndex(s => (s.title || "").toLowerCase().includes("irotava"));
+      if (skiIdx === -1) continue;
+
+      const depIso = stops[skiIdx].departure || "";
+      const hhmm   = depIso.length >= 16 ? depIso.substring(11, 16) : "";
+      if (!hhmm || !hhmm.includes(":")) continue;
+
+      const h = parseInt(hhmm.substring(0, 2), 10);
+      const m = parseInt(hhmm.substring(3, 5), 10);
+      const schedSec = h * 3600 + m * 60;
+      const schedMin = Math.round((schedSec - nowSec) / 60);
+      if (schedMin < -1) continue;
+
+      departures.push({
+        type:          "train",
+        route:         String(train.train || "?"),
+        direction:     train.direction || "",
+        destination:   stops.length ? (stops[stops.length - 1].title || "?") : "?",
+        origin:        stops.length ? (stops[0].title || "") : "",
+        scheduled_min: schedMin,
+        scheduled_sec: schedSec,
+        transport_id:  0
+      });
     }
-    return parseDepartures(resp.getContentText());
+
+    departures.sort((a, b) => a.scheduled_sec - b.scheduled_sec);
+    return departures.slice(0, 10);
   } catch (e) {
-    return { error: e.toString() };
+    return { error: e.message };
   }
+}
+
+// ── /api/all equivalent ──────────────────────────────────────
+function getAllDepartures() {
+  const stops = loadStops();
+  const result = [];
+
+  for (const stop of stops) {
+    const stopId = (stop.id || "").trim();
+    let departures;
+
+    if (!stopId) {
+      // Vilcienu pietura (Šķirotava)
+      departures = (stop.name || "").toLowerCase().includes("irotava")
+        ? fetchTrainStop()
+        : [];
+    } else {
+      departures = fetchStop(stopId);
+    }
+
+    result.push({ stop: stop, departures: departures });
+  }
+
+  return {
+    timestamp: Math.floor(Date.now() / 1000),
+    now_sec:   secondsFromMidnight(),
+    stops:     result
+  };
 }
