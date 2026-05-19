@@ -26,59 +26,12 @@
   </div>
 
   <script>
-    const API_BASE   = 'https://script.google.com/macros/s/AKfycbwlFFGCKRPKyVXQpXXq6-gRB5cAl720LRXrXqwwNjl-ym5_ZQUFJHuh_u7YzLF0jIHzeA/exec';
+    const API_BASE = 'http://localhost:5000/api';
     const REFRESH_MS = 10000;
-    let nextRefresh  = Date.now() + REFRESH_MS;
-    let stopsConfig  = null;
-
-    // JSONP loader — fallback when fetch is blocked by CORS redirect
-    function jsonp(url, timeoutMs = 8000) {
-      return new Promise((resolve, reject) => {
-        const cbName = '_gasCb' + Date.now();
-        const script = document.createElement('script');
-        const timer  = setTimeout(() => {
-          cleanup();
-          reject(new Error('JSONP timeout — pārbaudiet, vai lietotne ir izvietota kā publiska (Anyone)'));
-        }, timeoutMs);
-
-        function cleanup() {
-          clearTimeout(timer);
-          delete window[cbName];
-          script.remove();
-        }
-
-        window[cbName] = data => { cleanup(); resolve(data); };
-        script.onerror = ()   => { cleanup(); reject(new Error('JSONP neizdevās ielādēt — serveris atteica pieprasījumu (403/404)')); };
-        script.src = url + '&callback=' + cbName;
-        document.body.appendChild(script);
-      });
-    }
-
-    // Primary loader: tries plain fetch first (works when GAS has CORS headers),
-    // then falls back to JSONP.
-    async function fetchData(url) {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        return await res.json();
-      } catch (_) {
-        return jsonp(url);
-      }
-    }
-
-    // Fetch stops configuration from backend
-    async function loadStopsConfig() {
-      try {
-        stopsConfig = await fetchData(`${API_BASE}?action=stops`);
-        return stopsConfig;
-      } catch (err) {
-        console.error('Failed to load stops config:', err);
-        throw err;
-      }
-    }
+    let nextRefresh = Date.now() + REFRESH_MS;
 
     const transportClass = t => ({ bus:'bus', trol:'trol', tram:'tram', train:'train' }[t] ?? 'other');
-    const transportLabel = t => ({ bus:`<span class="temaki--bus"></span>`,   trol:`<span class="temaki--trolleybus"></span>`,    tram:`<span class="temaki--tram"></span>`  }[t] ?? '?');
+    const transportLabel = t => ({ bus:`<span class="temaki--bus"></span>`, trol:`<span class="temaki--trolleybus"></span>`, tram:`<span class="temaki--tram"></span>`, train:`<span class="temaki--train-bullet"></span>`   }[t] ?? '?');
     const etaClass = m => m < 0 ? 'overdue' : m <= 1 ? 'arrive' : m <= 5 ? 'soon' : 'normal';
     const formatEta = m => {
         if (m < 0) return 'Aizbr';
@@ -103,20 +56,16 @@
     function renderStopCard(item) {
       const stop = item.stop;
 
-      if (!stop.id) {
-        return `<div class="card empty"><div>Tukša pietura</div></div>`;
-      }
-
       const deps = Array.isArray(item.departures) ? item.departures : [];
       const rows = deps.length
-        ? deps.slice(0, 4).map(dep => `
+        ? deps.slice(0, 6).map(dep => `
             <div class="row">
               <div class="badge ${transportClass(dep.type)}">
                 ${transportLabel(dep.type)}${dep.route}
               </div>
               <div>
                 <div class="main-line">${dep.destination}</div>
-                <div class="dest">${dep.transport_id}</div>
+                <div class="dest">${dep.type === "train" ? (dep.origin ? "no " + dep.origin : "") : dep.transport_id}</div>
               </div>
               <div class="eta ${etaClass(dep.scheduled_min)}">
                 ${formatEta(dep.scheduled_min)}
@@ -126,9 +75,9 @@
         : '<div class="nodata">Nav reāllaika datu attiecībā uz šo pieturu.</div>';
 
       return `
-        <div class="card">
+        <div class="card ${stop.group ? 'grouped' : ''}">
           <div class="head">
-            <div class="stop-name">${stop.street || 'Pietura'}</div>
+            <div class="stop-name">${stop.name || 'Pietura'}</div>
             <div class="stop-meta">
               <span>${stop.street}</span>
               <span>${stop.direction || ''}</span>
@@ -141,23 +90,55 @@
     async function loadBoard() {
       const board = document.getElementById('board');
       try {
-        // Ensure stops config is loaded
-        if (!stopsConfig) {
-          await loadStopsConfig();
+        const res = await fetch(`${API_BASE}/all`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        function groupStops(stops) {
+            // Define which stop IDs should be paired
+            const pairs = [['0155','0154']];
+            const pairMap = {};
+            pairs.forEach(([a,b]) => { pairMap[a] = b; pairMap[b] = a; });
+            
+            const used = new Set();
+            const groups = [];
+            
+            for (let i = 0; i < stops.length; i++) {
+                const item = stops[i];
+                const id = item.stop.id;
+                if (used.has(id)) continue;
+                
+                const pairedId = pairMap[id];
+                if (pairedId) {
+                    const pairedItem = stops.find(s => s.stop.id === pairedId);
+                    if (pairedItem) {
+                        groups.push([item, pairedItem]);
+                        used.add(id);
+                        used.add(pairedId);
+                        continue;
+                    }
+                }
+                groups.push([item]);
+                used.add(id);
+            }
+            return groups;
         }
-        
-        const data = await fetchData(`${API_BASE}?action=all`);
-        board.innerHTML = data.stops.map(renderStopCard).join('');
+        board.innerHTML = groupStops(data.stops).map(group => {
+            if (group.length === 2) {
+                return `<div class="card-pair">
+                    ${renderStopCard(group[0])}
+                    ${renderStopCard(group[1])}
+                </div>`;
+            }
+            return renderStopCard(group[0]);
+        }).join('');
         document.getElementById('last-update').textContent =
           'Pēdējais atjauninājums: ' + new Date().toLocaleTimeString('lv-LV');
       } catch (err) {
         board.innerHTML = `
           <div class="card" style="grid-column:1/-1;min-height:180px;">
             <div class="error">
-              Kļūda ielādē: ${err.message}.<br><br>
-              Pārliecinieties, ka Google Apps Script ir izvietots:<br>
-              <b>Izvietot → Jauns izvietojums → Tīmekļa lietotne</b><br>
-              Izpildīt kā: <b>Es</b> · Piekļuve: <b>Visi</b>
+              Kļūda ielādē: ${err.message}.<br>
+              Pārbaudiet, vai Python API darbojas uz http://localhost:5000
             </div>
           </div>`;
       }
@@ -170,8 +151,8 @@
 
     updateClock();
     updateProgress();
-    setInterval(updateClock,    1000);
-    setInterval(updateProgress,  100);
+    setInterval(updateClock, 1000);
+    setInterval(updateProgress, 100);
     refresh();
     setInterval(refresh, REFRESH_MS);
   </script>
