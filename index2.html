@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="lv">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reāllaika dati</title>
+  <link rel="stylesheet" href="./main.css">
+</head>
+<body>
+  <div class="wrap">
+
+    <div class="topbar">
+      <h1>Reāllaika dati</h1>
+      <div class="statusbar">
+        <div class="pill" id="clock">--:--:--</div>
+        <div class="pill" id="last-update">Pēdējais atjauninājums: --</div>
+        <div class="pill-progress" id="pill-prog">
+          <div class="pill-progress-fill" id="pill-fill" style="width:100%"></div>
+          <span class="pill-progress-text" id="pill-label">Atjaunināšana pēc 10 sek</span>
+        </div>      
+      </div>
+    </div>
+
+    <div class="grid" id="board"></div>
+
+  </div>
+
+  <script>
+    const API_BASE   = 'https://script.google.com/macros/s/AKfycbwlFFGCKRPKyVXQpXXq6-gRB5cAl720LRXrXqwwNjl-ym5_ZQUFJHuh_u7YzLF0jIHzeA/exec';
+    const REFRESH_MS = 10000;
+    let nextRefresh  = Date.now() + REFRESH_MS;
+    let stopsConfig  = null;
+
+    // JSONP loader — fallback when fetch is blocked by CORS redirect
+    function jsonp(url, timeoutMs = 8000) {
+      return new Promise((resolve, reject) => {
+        const cbName = '_gasCb' + Date.now();
+        const script = document.createElement('script');
+        const timer  = setTimeout(() => {
+          cleanup();
+          reject(new Error('JSONP timeout — pārbaudiet, vai lietotne ir izvietota kā publiska (Anyone)'));
+        }, timeoutMs);
+
+        function cleanup() {
+          clearTimeout(timer);
+          delete window[cbName];
+          script.remove();
+        }
+
+        window[cbName] = data => { cleanup(); resolve(data); };
+        script.onerror = ()   => { cleanup(); reject(new Error('JSONP neizdevās ielādēt — serveris atteica pieprasījumu (403/404)')); };
+        script.src = url + '&callback=' + cbName;
+        document.body.appendChild(script);
+      });
+    }
+
+    // Primary loader: tries plain fetch first (works when GAS has CORS headers),
+    // then falls back to JSONP.
+    async function fetchData(url) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return await res.json();
+      } catch (_) {
+        return jsonp(url);
+      }
+    }
+
+    // Fetch stops configuration from backend
+    async function loadStopsConfig() {
+      try {
+        stopsConfig = await fetchData(`${API_BASE}?action=stops`);
+        return stopsConfig;
+      } catch (err) {
+        console.error('Failed to load stops config:', err);
+        throw err;
+      }
+    }
+
+    const transportClass = t => ({ bus:'bus', trol:'trol', tram:'tram', train:'train' }[t] ?? 'other');
+    const transportLabel = t => ({ bus:`<span class="temaki--bus"></span>`,   trol:`<span class="temaki--trolleybus"></span>`,    tram:`<span class="temaki--tram"></span>`  }[t] ?? '?');
+    const etaClass = m => m < 0 ? 'overdue' : m <= 1 ? 'arrive' : m <= 5 ? 'soon' : 'normal';
+    const formatEta = m => {
+        if (m < 0) return 'Aizbr';
+        if (m <= 0) return 'Pienāk';
+        if (m >= 60) return `${Math.floor(m/60)}h ${m%60}`;
+        return String(m);
+    };
+
+    function updateClock() {
+      document.getElementById('clock').textContent =
+        new Date().toLocaleTimeString('lv-LV');
+    }
+
+    function updateProgress() {
+      const remaining = Math.max(0, nextRefresh - Date.now());
+      const pct = (remaining / REFRESH_MS) * 100;
+      const sec = Math.ceil(remaining / 1000);
+      document.getElementById('pill-fill').style.width  = pct + '%';
+      document.getElementById('pill-label').textContent = `Atjaunināšana pēc ${sec} sek`;
+    }
+
+    function renderStopCard(item) {
+      const stop = item.stop;
+
+      if (!stop.id) {
+        return `<div class="card empty"><div>Tukša pietura</div></div>`;
+      }
+
+      const deps = Array.isArray(item.departures) ? item.departures : [];
+      const rows = deps.length
+        ? deps.slice(0, 4).map(dep => `
+            <div class="row">
+              <div class="badge ${transportClass(dep.type)}">
+                ${transportLabel(dep.type)}${dep.route}
+              </div>
+              <div>
+                <div class="main-line">${dep.destination}</div>
+                <div class="dest">${dep.transport_id}</div>
+              </div>
+              <div class="eta ${etaClass(dep.scheduled_min)}">
+                ${formatEta(dep.scheduled_min)}
+                ${dep.scheduled_min > 0 ? '<small>min</small>' : ''}
+              </div>
+            </div>`).join('')
+        : '<div class="nodata">Nav reāllaika datu attiecībā uz šo pieturu.</div>';
+
+      return `
+        <div class="card">
+          <div class="head">
+            <div class="stop-name">${stop.street || 'Pietura'}</div>
+            <div class="stop-meta">
+              <span>${stop.street}</span>
+              <span>${stop.direction || ''}</span>
+            </div>
+          </div>
+          <div class="list">${rows}</div>
+        </div>`;
+    }
+
+    async function loadBoard() {
+      const board = document.getElementById('board');
+      try {
+        // Ensure stops config is loaded
+        if (!stopsConfig) {
+          await loadStopsConfig();
+        }
+        
+        const data = await fetchData(`${API_BASE}?action=all`);
+        board.innerHTML = data.stops.map(renderStopCard).join('');
+        document.getElementById('last-update').textContent =
+          'Pēdējais atjauninājums: ' + new Date().toLocaleTimeString('lv-LV');
+      } catch (err) {
+        board.innerHTML = `
+          <div class="card" style="grid-column:1/-1;min-height:180px;">
+            <div class="error">
+              Kļūda ielādē: ${err.message}.<br><br>
+              Pārliecinieties, ka Google Apps Script ir izvietots:<br>
+              <b>Izvietot → Jauns izvietojums → Tīmekļa lietotne</b><br>
+              Izpildīt kā: <b>Es</b> · Piekļuve: <b>Visi</b>
+            </div>
+          </div>`;
+      }
+    }
+
+    async function refresh() {
+      await loadBoard();
+      nextRefresh = Date.now() + REFRESH_MS;
+    }
+
+    updateClock();
+    updateProgress();
+    setInterval(updateClock,    1000);
+    setInterval(updateProgress,  100);
+    refresh();
+    setInterval(refresh, REFRESH_MS);
+  </script>
+</body>
+</html>

@@ -17,7 +17,7 @@
         <div class="pill-progress" id="pill-prog">
           <div class="pill-progress-fill" id="pill-fill" style="width:100%"></div>
           <span class="pill-progress-text" id="pill-label">Atjaunināšana pēc 10 sek</span>
-        </div>      
+        </div>
       </div>
     </div>
 
@@ -26,65 +26,26 @@
   </div>
 
   <script>
-    const API_BASE   = 'https://script.google.com/macros/s/AKfycbwlFFGCKRPKyVXQpXXq6-gRB5cAl720LRXrXqwwNjl-ym5_ZQUFJHuh_u7YzLF0jIHzeA/exec';
+    const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxTlSdagb4akAxxZvRcvTsxxg05XXJ5gCVuTd6uKmDCAry6BWGVFNF2qcEkw253MA/exec';
     const REFRESH_MS = 10000;
-    let nextRefresh  = Date.now() + REFRESH_MS;
-    let stopsConfig  = null;
+    let nextRefresh = Date.now() + REFRESH_MS;
 
-    // JSONP loader — fallback when fetch is blocked by CORS redirect
-    function jsonp(url, timeoutMs = 8000) {
-      return new Promise((resolve, reject) => {
-        const cbName = '_gasCb' + Date.now();
-        const script = document.createElement('script');
-        const timer  = setTimeout(() => {
-          cleanup();
-          reject(new Error('JSONP timeout — pārbaudiet, vai lietotne ir izvietota kā publiska (Anyone)'));
-        }, timeoutMs);
+    const transportClass = t =>
+      ({ bus: 'bus', trol: 'trol', tram: 'tram', train: 'train' }[t] ?? 'other');
 
-        function cleanup() {
-          clearTimeout(timer);
-          delete window[cbName];
-          script.remove();
-        }
+    const transportLabel = t =>
+      ({ bus:   `<span class="temaki--bus"></span>`,
+         trol:  `<span class="temaki--trolleybus"></span>`,
+         tram:  `<span class="temaki--tram"></span>`,
+         train: `<span class="temaki--train-bullet"></span>`
+       }[t] ?? '?');
 
-        window[cbName] = data => { cleanup(); resolve(data); };
-        script.onerror = ()   => { cleanup(); reject(new Error('JSONP neizdevās ielādēt — serveris atteica pieprasījumu (403/404)')); };
-        script.src = url + '&callback=' + cbName;
-        document.body.appendChild(script);
-      });
-    }
-
-    // Primary loader: tries plain fetch first (works when GAS has CORS headers),
-    // then falls back to JSONP.
-    async function fetchData(url) {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        return await res.json();
-      } catch (_) {
-        return jsonp(url);
-      }
-    }
-
-    // Fetch stops configuration from backend
-    async function loadStopsConfig() {
-      try {
-        stopsConfig = await fetchData(`${API_BASE}?action=stops`);
-        return stopsConfig;
-      } catch (err) {
-        console.error('Failed to load stops config:', err);
-        throw err;
-      }
-    }
-
-    const transportClass = t => ({ bus:'bus', trol:'trol', tram:'tram', train:'train' }[t] ?? 'other');
-    const transportLabel = t => ({ bus:`<span class="temaki--bus"></span>`,   trol:`<span class="temaki--trolleybus"></span>`,    tram:`<span class="temaki--tram"></span>`  }[t] ?? '?');
-    const etaClass = m => m < 0 ? 'overdue' : m <= 1 ? 'arrive' : m <= 5 ? 'soon' : 'normal';
+    const etaClass  = m => m < 0 ? 'overdue' : m <= 1 ? 'arrive' : m <= 5 ? 'soon' : 'normal';
     const formatEta = m => {
-        if (m < 0) return 'Aizbr';
-        if (m <= 0) return 'Pienāk';
-        if (m >= 60) return `${Math.floor(m/60)}h ${m%60}`;
-        return String(m);
+      if (m < 0)  return 'Aizbr';
+      if (m <= 0) return 'Pienāk';
+      if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}`;
+      return String(m);
     };
 
     function updateClock() {
@@ -96,27 +57,27 @@
       const remaining = Math.max(0, nextRefresh - Date.now());
       const pct = (remaining / REFRESH_MS) * 100;
       const sec = Math.ceil(remaining / 1000);
-      document.getElementById('pill-fill').style.width  = pct + '%';
+      document.getElementById('pill-fill').style.width = pct + '%';
       document.getElementById('pill-label').textContent = `Atjaunināšana pēc ${sec} sek`;
     }
 
     function renderStopCard(item) {
       const stop = item.stop;
-
-      if (!stop.id) {
-        return `<div class="card empty"><div>Tukša pietura</div></div>`;
-      }
-
       const deps = Array.isArray(item.departures) ? item.departures : [];
+
       const rows = deps.length
-        ? deps.slice(0, 4).map(dep => `
+        ? deps.slice(0, 6).map(dep => `
             <div class="row">
               <div class="badge ${transportClass(dep.type)}">
                 ${transportLabel(dep.type)}${dep.route}
               </div>
               <div>
                 <div class="main-line">${dep.destination}</div>
-                <div class="dest">${dep.transport_id}</div>
+                <div class="dest">
+                  ${dep.type === 'train'
+                    ? (dep.origin ? 'no ' + dep.origin : '')
+                    : dep.transport_id}
+                </div>
               </div>
               <div class="eta ${etaClass(dep.scheduled_min)}">
                 ${formatEta(dep.scheduled_min)}
@@ -126,9 +87,9 @@
         : '<div class="nodata">Nav reāllaika datu attiecībā uz šo pieturu.</div>';
 
       return `
-        <div class="card">
+        <div class="card ${stop.group ? 'grouped' : ''}">
           <div class="head">
-            <div class="stop-name">${stop.street || 'Pietura'}</div>
+            <div class="stop-name">${stop.name || 'Pietura'}</div>
             <div class="stop-meta">
               <span>${stop.street}</span>
               <span>${stop.direction || ''}</span>
@@ -138,26 +99,63 @@
         </div>`;
     }
 
+    function groupStops(stops) {
+      const pairs   = [['0155', '0154']];
+      const pairMap = {};
+      pairs.forEach(([a, b]) => { pairMap[a] = b; pairMap[b] = a; });
+
+      const used   = new Set();
+      const groups = [];
+
+      for (const item of stops) {
+        const id = item.stop.id;
+        if (used.has(id)) continue;
+
+        const pairedId   = pairMap[id];
+        const pairedItem = pairedId ? stops.find(s => s.stop.id === pairedId) : null;
+
+        if (pairedItem) {
+          groups.push([item, pairedItem]);
+          used.add(id);
+          used.add(pairedId);
+        } else {
+          groups.push([item]);
+          used.add(id);
+        }
+      }
+      return groups;
+    }
+
     async function loadBoard() {
       const board = document.getElementById('board');
       try {
-        // Ensure stops config is loaded
-        if (!stopsConfig) {
-          await loadStopsConfig();
-        }
-        
-        const data = await fetchData(`${API_BASE}?action=all`);
-        board.innerHTML = data.stops.map(renderStopCard).join('');
+        // Apps Script требует ?action=all (GET параметр)
+        const url = APPS_SCRIPT_URL + '?action=all';
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+
+        if (data.error) throw new Error(data.error);
+
+        board.innerHTML = groupStops(data.stops).map(group => {
+          if (group.length === 2) {
+            return `<div class="card-pair">
+              ${renderStopCard(group[0])}
+              ${renderStopCard(group[1])}
+            </div>`;
+          }
+          return renderStopCard(group[0]);
+        }).join('');
+
         document.getElementById('last-update').textContent =
           'Pēdējais atjauninājums: ' + new Date().toLocaleTimeString('lv-LV');
+
       } catch (err) {
         board.innerHTML = `
           <div class="card" style="grid-column:1/-1;min-height:180px;">
             <div class="error">
-              Kļūda ielādē: ${err.message}.<br><br>
-              Pārliecinieties, ka Google Apps Script ir izvietots:<br>
-              <b>Izvietot → Jauns izvietojums → Tīmekļa lietotne</b><br>
-              Izpildīt kā: <b>Es</b> · Piekļuve: <b>Visi</b>
+              Kļūda ielādē: ${err.message}.<br>
+              Pārbaudiet, vai Apps Script ir pareizi konfigurēts un URL ir nomainīts.
             </div>
           </div>`;
       }
@@ -170,8 +168,8 @@
 
     updateClock();
     updateProgress();
-    setInterval(updateClock,    1000);
-    setInterval(updateProgress,  100);
+    setInterval(updateClock, 1000);
+    setInterval(updateProgress, 100);
     refresh();
     setInterval(refresh, REFRESH_MS);
   </script>
