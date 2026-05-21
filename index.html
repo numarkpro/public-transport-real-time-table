@@ -61,12 +61,12 @@
       document.getElementById('pill-label').textContent = `Atjaunināšana pēc ${sec} sek`;
     }
 
-    function renderStopCard(item) {
+    function renderStopCard(item, limit = 6) {
       const stop = item.stop;
       const deps = Array.isArray(item.departures) ? item.departures : [];
 
       const rows = deps.length
-        ? deps.slice(0, 6).map(dep => `
+        ? deps.slice(0, limit).map(dep => `
             <div class="row">
               <div class="badge ${transportClass(dep.type)}">
                 ${transportLabel(dep.type)}${dep.route}
@@ -140,11 +140,11 @@
         board.innerHTML = groupStops(data.stops).map(group => {
           if (group.length === 2) {
             return `<div class="card-pair">
-              ${renderStopCard(group[0])}
-              ${renderStopCard(group[1])}
+              ${renderStopCard(group[0], 2)}
+              ${renderStopCard(group[1], 2)}
             </div>`;
           }
-          return renderStopCard(group[0]);
+          return renderStopCard(group[0], 6);
         }).join('');
 
         document.getElementById('last-update').textContent =
