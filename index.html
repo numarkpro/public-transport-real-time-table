@@ -89,9 +89,9 @@
       return `
         <div class="card ${stop.group ? 'grouped' : ''}">
           <div class="head">
-            <div class="stop-name">${stop.name || 'Pietura'}</div>
+            <div class="stop-name">${stop.street || 'Pietura'}</div>
             <div class="stop-meta">
-              <span>${stop.street}</span>
+              <span>"${stop.name}"</span>
               <span>${stop.direction || ''}</span>
             </div>
           </div>
